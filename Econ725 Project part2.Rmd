@@ -1,0 +1,492 @@
+---
+title: "econ725 project Q3"
+author: "Demi Han, Ruyuan Mei"
+date: "11/19/2020"
+output: pdf_document
+---
+
+
+######Sugandh###### 
+```{r message=FALSE, warning=FALSE}
+require(tidyverse)
+require(ggplot2)
+require(data.table)
+require(plyr)
+require(dplyr)
+require(knitr)
+require(foreign)
+require(ggcorrplot)
+require(corrplot)
+require(caret)
+require(gridExtra)
+require(scales)
+require(Rmisc)
+require(ggrepel)
+require(randomForest)
+require(glmnet)
+require(psych)
+require(xgboost)
+require(ggthemes)
+```
+
+
+```{r message=FALSE, warning=FALSE}
+#loading the dataset
+df <- read.dta("~/Desktop/ebaydatafinal.dta")
+```
+
+```{r}
+#summary for the highest bid
+summary(df$biddy1)
+```
+
+There are 22522 null values in highest bid variable. This column will be revenue as its the amount the seller gets when he sells the item. one thing to notice here is that the maximum bid in dataset is 1780400.
+
+```{r}
+#keeping only items which have been sold
+#df <- df[df$sell == 1 ,]
+```
+
+I did this considering that if the item isn't sold , then there is no revenue for the seller.
+
+Checking if we have null values now for highest bid 
+
+```{r}
+summary(df$biddy1)
+```
+
+
+
+## Data Cleaning 
+
+# Formatting Dates: 
+
+The columns start date and end date 
+
+```{r}
+head(df$startdate)
+```
+
+```{r message=FALSE, warning=FALSE}
+library("lubridate")
+#converting strings into date format 
+df$startdate <- parse_date_time(df$startdate, orders="mdy HMS")
+df$enddate <- parse_date_time(df$enddate, orders="mdy HMS")
+```
+
+
+```{r}
+#extracting months from dates 
+df$months <-  month(df$startdate)
+df$days <- day(df$startdate)
+df$monthe <-  month(df$enddate)
+df$daye <- day(df$enddate)
+```
+
+```{r}
+#converting long dates to short dates and converting them to mm-dd-yy format 
+df$startdate <- date(df$startdate)
+df$startdate <- format(df$startdate, "%m-%d-%y")
+df$enddate <- date(df$enddate)
+df$enddate <- format(df$enddate, "%m-%d-%y")
+```
+
+
+The most importent numeric variables 
+
+```{r}
+numericVars <- which(sapply(df, is.numeric)) #index vector numeric variables
+numericVarNames <- names(numericVars) #saving names vector for use later on
+cat('There are', length(numericVars), 'numeric variables')
+```
+
+```{r}
+df_numVar <- df[, numericVars]
+#correlation of all numeric variables
+cor_numVar <- cor(df_numVar, use="pairwise.complete.obs")
+```
+
+```{r}
+#sort on decreasing correlations with highest bid
+cor_sorted <- as.matrix(sort(cor_numVar[,'biddy1'], decreasing = TRUE))
+```
+
+
+
+Lets see which variables are positively correlated with highest bid 
+
+```{r}
+head(cor_sorted ,50)
+```
+
+From above we can see that biddy2 , bookvalue , startbid , warranty , options , phone, logsize , loghtml , logtext , numbids , featured , descriptionsize , dealer , length , inspection , photos , logage are highly correlated with highest bid .
+
+
+
+Now , lets see which variables are negatively correlated with highest bid 
+```{r}
+tail(cor_sorted ,50)
+```
+
+
+From above we can see that logmiles , rust , dent , crack , age , broken , problem are negatively correlated with highest bid . 
+
+
+## Missing data , label encoding and Factorizing variables 
+
+
+
+```{r}
+#which columns have missing values 
+NAcol <- which(colSums(is.na(df)) > 0)
+NAcol
+```
+
+```{r}
+cat('There are', length(NAcol), 'columns with missing values')
+```
+bookvalue has 19 missing values and photos has 29 missing values and biddy5 has  45 missing values , for now I am just dropping these missing values and we will think about imputingf them in future . 
+
+```{r message=FALSE}
+#deleting missing values 
+df=df[!is.na(df$bookvalue),]
+df=df[!is.na(df$photos),]
+df=df[!is.na(df$biddy5),]
+```
+
+
+Now lets try imputing age and logmiles variables. I am imputing these variables with the median 
+
+```{r message=FALSE, warning=FALSE}
+library(Hmisc)
+df$age<-impute(df$age, median)
+df$logmiles<-impute(df$logmiles, median)
+```
+
+
+
+## Label Encoding / factorizing the charachter variables 
+
+```{r}
+Charcol <- names(df[,sapply(df, is.character)])
+Charcol
+```
+
+```{r}
+cat('There are', length(Charcol), 'remaining columns with character values')
+```
+First lets consider variables maker , interior and exterior . They all are factor variables .
+
+```{r}
+df$maker <- as.factor(df$maker)
+table(df$maker)
+```
+
+```{r}
+df$interior <- as.factor(df$interior)
+table(df$interior)
+```
+
+```{r}
+df$exterior <- as.factor(df$exterior)
+table(df$exterior)
+```
+
+
+# dealing with date variables 
+
+```{r}
+df$membersince <- parse_date_time(df$membersince, orders="mdy")
+df$monthm <-month(df$membersince)
+df$daym <- day(df$membersince)
+df$membersince <- date(df$membersince)
+df$membersince <- format(df$membersince, "%m-%d-%y")
+```
+
+```{r}
+df$months <- as.factor(df$months)
+df$days <- as.factor(df$days)
+df$monthe <- as.factor(df$monthe)
+df$daye <- as.factor(df$daye)
+df$monthm <- as.factor(df$monthm)
+df$daym <- as.factor(df$daym)
+```
+
+
+## Correlations
+
+```{r}
+#keeping only required columns 
+df<-df[, c("biddy1" , "biddy2" , "biddy3" ,"biddy4", "biddy5" ,"bookvalue", "photos",  "startbid" , "warranty" , "options" , "phone", "logsize" , "loghtml" , "logtext" , "numbids" , "featured" , "descriptionsize" , "dealer" , "length" , "inspection" , "photos" , "age" , "logmiles" , "rust" , "dent" , "crack" , "age" , "broken","months", "monthm", "monthe", "days" , "daye" , "daym", "maker", "interior" , "exterior" , "enddate" , "startdate")]
+```
+
+
+## Finding variable importance with Random forest 
+
+```{r}
+set.seed(2020)
+quick_RF <- randomForest(x=df[1:13374,-36], y= df$biddy1[1:13374], ntree=100,importance=TRUE)
+imp_RF <- importance(quick_RF)
+imp_DF <- data.frame(Variables = row.names(imp_RF), MSE = imp_RF[,1])
+imp_DF <- imp_DF[order(imp_DF$MSE, decreasing = TRUE),]
+ggplot(imp_DF[1:20,], aes(x=reorder(Variables, MSE), y=MSE, fill=MSE)) + geom_bar(stat = 'identity') + labs(x = 'Variables', y= '% increase MSE if variable is randomly permuted') + coord_flip() + theme(legend.position="none")
+```
+
+
+
+Lets draw some graphs associated with the highest bid/ revenue. first lets see the density of the biddy1 
+
+```{r}
+p2 <-ggplot(data=df[df$biddy1 < 50000,], aes(x= biddy1))+
+  geom_histogram(fill="blue", binwidth = 1500)+
+  ggtitle('Highest bid density ') + theme_stata()
+p2
+```
+
+Lets look at the relationship of this biddy1/revenue with number of bidders 
+```{r}
+p2 <-ggplot(data= df[df$biddy1 < 50000,], aes(x = numbids,y= biddy1))+
+  geom_point()
+p2
+```
+
+
+
+
+######Demi Han, Ruyuan Mei######
+
+
+```
+``{r failed}
+#split biddy1 by month
+df1<-df[, c("biddy1" ,"months", "monthe", "days" , "daye" , "enddate" , "startdate")]
+sp<-split(df1,df1[,c("monthe")],drop=TRUE)
+sp1<-data.table(sp)
+result1<-lapply(sp1,FUN=function(x) sum(x$AMOUNT))
+result2<-lapply(sp1,FUN=function(x) mean(x$AMOUNT))
+result<-cbind(result1,result2)
+```
+
+```
+``{r failed}
+#split biddy1 by month
+df1<-df[, c("biddy1" ,"months" , "monthe", "days" , "daye" , "enddate" , "startdate")]
+
+
+g <- split(df1,df1$monthe,)
+g
+df2<-data.table(g)
+
+g1 <- lapply(df2,mean)
+result1<-lapply(df2,FUN=function(x) sum(df2$biddy1))
+df3 <- data.table(result1)
+
+
+sp<-split(df1,df1[,c("monthe","biddy1")],drop=TRUE)
+result1<-lapply(sp,FUN=function(x) sum(x$AMOUNT))
+result2<-lapply(sp,FUN=function(x) mean(x$AMOUNT))
+result<-cbind(result1,result2)
+```
+
+
+```{r}
+#split biddy1 by month
+df1<-df[, c("biddy1" ,"months" , "monthe", "days" , "daye" , "enddate" , "startdate")]
+dfmonth2 <- df1[df1$monthe == 2,]
+meanmonth2 <- mean(dfmonth2$biddy1)
+summonth2 <- sum(dfmonth2$biddy1)
+meanmonth2
+summonth2
+
+dfmonth3 <- df1[df1$monthe == 3,]
+meanmonth3 <- mean(dfmonth3$biddy1)
+summonth3 <- sum(dfmonth3$biddy1)
+meanmonth3
+summonth3
+
+dfmonth4 <- df1[df1$monthe == 4,]
+meanmonth4 <- mean(dfmonth4$biddy1)
+summonth4 <- sum(dfmonth4$biddy1)
+meanmonth4
+summonth4
+
+dfmonth5 <- df1[df1$monthe == 5,]
+meanmonth5 <- mean(dfmonth5$biddy1)
+summonth5 <- sum(dfmonth5$biddy1)
+meanmonth5
+summonth5
+
+dfmonth6 <- df1[df1$monthe == 6,]
+meanmonth6 <- mean(dfmonth6$biddy1)
+summonth6 <- sum(dfmonth6$biddy1)
+meanmonth6
+summonth6
+
+dfmonth7 <- df1[df1$monthe == 7,]
+meanmonth7 <- mean(dfmonth7$biddy1)
+summonth7 <- sum(dfmonth7$biddy1)
+meanmonth7
+summonth7
+
+dfmonth8 <- df1[df1$monthe == 8,]
+meanmonth8 <- mean(dfmonth8$biddy1)
+summonth8 <- sum(dfmonth8$biddy1)
+meanmonth8
+summonth8
+
+dfmonth9 <- df1[df1$monthe == 9,]
+meanmonth9 <- mean(dfmonth9$biddy1)
+summonth9 <- sum(dfmonth9$biddy1)
+meanmonth9
+summonth9
+
+dfmonth10 <- df1[df1$monthe == 10,]
+meanmonth10 <- mean(dfmonth10$biddy1)
+summonth10 <- sum(dfmonth10$biddy1)
+meanmonth10
+summonth10
+
+#summary monthly mean
+monthe <- c(2,3,4,5,6,7,8,9,10)
+mean <- c(meanmonth2,meanmonth3,meanmonth4,meanmonth5,meanmonth6,meanmonth7,meanmonth8,meanmonth9,meanmonth10)
+#summary monthly sum
+sum <- c(summonth2,summonth3,summonth4,summonth5,summonth6,summonth7,summonth8,summonth9,summonth10)
+
+monthly <- data.frame(monthe,mean,sum)
+monthly
+```
+
+```{r}
+#graphically biddy1's mean by month
+monthly <- tibble(
+  month = c("2","3","4","5","6","7","8","9","10"),
+  mean = c(monthly$mean)
+)
+knitr::kable(monthly)
+
+p3 <- ggplot(data = monthly, mapping = aes(
+  x = fct_reorder(month, desc(mean)),
+  y = mean ))
+
+p3 + geom_col(fill = "lightblue") +
+  geom_text(mapping = aes(
+    y = mean / 2, label = paste(mean))) +
+  scale_y_continuous(breaks = NULL) +
+  coord_flip() + 
+  labs(x = "month", 
+       y = "mean")
+```
+
+
+
+```{r}
+#summary by days
+df1$daye<- as.numeric(df1$daye)
+dfmonth_b <- df1[df1$daye <= 10,]
+meanmonth_b <- mean(dfmonth_b$biddy1)
+summonth_b <- sum(dfmonth_b$biddy1)
+meanmonth_b
+summonth_b
+
+dfmonth_m <- df1[df1$daye >=11 & df1$daye <= 20,]
+meanmonth_m <- mean(dfmonth_m$biddy1)
+summonth_m <- sum(dfmonth_m$biddy1)
+meanmonth_m
+summonth_m
+
+dfmonth_e <- df1[df1$daye >= 21 & df1$daye <= 31,]
+meanmonth_e <- mean(dfmonth_e$biddy1)
+summonth_e <- sum(dfmonth_e$biddy1)
+meanmonth_e
+summonth_e
+
+#summary mean
+period <- c("Beginning of month","Middle of month","Ending of month")
+meandays <- c(meanmonth_b,meanmonth_m,meanmonth_e)
+#summary sum
+sumdays <- c(summonth_b,summonth_m,summonth_e)
+
+daily <- data.frame(period,meandays,sumdays)
+daily
+daily <- data.table(daily)
+```
+
+
+```{r}
+#graphically biddy1's mean by days
+daily <- tibble(
+  period = c(daily$period),
+  meandays = c(daily$meandays)
+)
+knitr::kable(daily)
+
+p4 <- ggplot(data = daily, mapping = aes(
+  x = fct_reorder(period, desc(meandays)),
+  y = meandays ))
+
+p4 + geom_col(fill = "orange", width = 0.4) +
+  geom_text(mapping = aes(
+    y = meandays / 2, label = paste(meandays))) +
+  scale_y_continuous(breaks = NULL) +
+  coord_flip() +
+  labs(x = "period", 
+       y = "mean")
+```
+#In conclusion, as buyers, we could get a better price in the endding of the month, and avoid buying a car in March to June.
+
+
+```{r message=FALSE, warning=FALSE}
+#weekdays
+df <- read.dta("~/Desktop/ebaydatafinal.dta")
+df <- df[df$sell == 1 ,]
+library("lubridate")
+#converting strings into date format 
+df$startdate <- parse_date_time(df$startdate, orders="mdy HMS")
+df$enddate <- parse_date_time(df$enddate, orders="mdy HMS")
+df$wdays <-  wday(df$enddate)
+
+df4 <-df[, c("biddy1" ,  "enddate" , "wdays")]
+```
+
+```{r}
+#summary by weekdays
+df4$wdays <- as.numeric(df4$wdays)
+
+dfweekday <- df4[df4$wdays <= 5,]
+meanweekday <- mean(dfweekday$biddy1)
+meanweekday
+
+dfweekend <- df4[df4$wdays > 5,]
+meanweekend <- mean(dfweekend$biddy1)
+meanweekend
+```
+
+```{r}
+#graphically weekdays vs. weekend
+wdays <- c("weekday","weekend")
+meanwdays <- c(meanweekday,meanweekend)
+weekly <- data.frame(wdays,meanwdays)
+weekly
+weekly <- data.table(weekly)
+```
+
+```{r}
+#graphically biddy1's mean (weekdays vs. weekend)
+weekly <- tibble(
+  wdays = c(weekly$wdays),
+  meanwdays = c(weekly$meanwdays)
+)
+knitr::kable(weekly)
+
+p5 <- ggplot(data = weekly, mapping = aes(
+  x = wdays,
+  y = meanwdays ))
+p5 + geom_col(fill = "orange",width = 0.4) +
+  geom_text(mapping = aes(
+    y = meanwdays / 2, label = paste(meanwdays))) +
+  scale_y_continuous(breaks = NULL) +
+  coord_flip() +
+  labs(x = "wdays", 
+       y = "mean")
+
+```
